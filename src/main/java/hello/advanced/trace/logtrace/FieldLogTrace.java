@@ -1,40 +1,45 @@
-package hello.advanced.trace.hellotrace;
+package hello.advanced.trace.logtrace;
 
 import hello.advanced.trace.TraceId;
 import hello.advanced.trace.TraceStatus;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Component;
 
 @Slf4j
-@Component
-public class HelloTraceV2 {
+public class FieldLogTrace implements LogTrace{
 
     private static final String START_PREFIX = "-->";
     private static final String COMPLETE_PREFIX = "<--";
     private static final String EX_PREFIX = "<X-";
-    //시작할 때 호출
-    public TraceStatus begin(String message){
-        TraceId traceId = new TraceId();
+
+    //traceId 동기화 => 동시성 이슈 생길 수 있는데 뒤에서 다룸
+    private TraceId traceIdHolder;
+
+    @Override
+    public TraceStatus begin(String message) {
+        //sync호출
+        syncTraceId();
+        //sync 후에는 traceIdHolder에 값이 들어가므로 이렇게
+        TraceId traceId = traceIdHolder;
         Long startTimeMs = System.currentTimeMillis();
         //로그 출력
         log.info("[{}] {}{}", traceId.getId(), addSpace(START_PREFIX, traceId.getLevel()), message);
-        return new TraceStatus(traceId, startTimeMs, message);
+        return new TraceStatus(traceId, startTimeMs, message);    }
+
+    private void syncTraceId(){
+        if (traceIdHolder == null){
+            traceIdHolder = new TraceId();
+        }else{
+            //null이 아니면 다음 level로
+            traceIdHolder = traceIdHolder.createNextId();
+        }
     }
-    //동기화 기능 부가 (V2에서 추가)
-    //처음에는 begin 호출하고 두번째부터는 beginSync
-    public TraceStatus beginSync(TraceId beforeTraceId, String message){
-        TraceId nextId = beforeTraceId.createNextId();
-        Long startTimeMs = System.currentTimeMillis();
-        //로그 출력
-        log.info("[{}] {}{}", nextId.getId(), addSpace(START_PREFIX, nextId.getLevel()), message);
-        return new TraceStatus(nextId, startTimeMs, message);
-    }
-    //종료할 때 호출
-    public void end(TraceStatus status){
+    @Override
+    public void end(TraceStatus status) {
         complete(status, null);
     }
-    //종료 시 end나 exception 둘 중 하나 호출. 예외 시엔 이게 터지는거지
-    public void exception(TraceStatus status, Exception e){
+
+    @Override
+    public void exception(TraceStatus status, Exception e) {
         complete(status, e);
     }
 
@@ -46,6 +51,18 @@ public class HelloTraceV2 {
             log.info("[{}] {}{} time={}ms", traceId.getId(), addSpace(COMPLETE_PREFIX, traceId.getLevel()), status.getMessage(), resultTimeMs);
         }else{
             log.info("[{}] {}{} time={}ms ex={}", traceId.getId(), addSpace(EX_PREFIX, traceId.getLevel()), status.getMessage(), resultTimeMs, e.toString());
+        }
+        //traceId 없앰
+        releaseTraceId();
+    }
+
+    private void releaseTraceId() {
+        //첫번째 레벨이라는 것은 마지막 단계로 온 것
+        if(traceIdHolder.isFirstLevel()){
+            traceIdHolder = null;
+        }else{
+            //이전 level로 돌려주는 것.
+            traceIdHolder = traceIdHolder.createPreviousId();
         }
     }
 
